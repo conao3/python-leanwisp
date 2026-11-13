@@ -1,7 +1,8 @@
 .PHONY: check
 check:
 	nix fmt -- --ci
-	uv run pytest
+	cargo clippy --all-targets -- -D warnings
+	cargo test
 
 .PHONY: format
 format:

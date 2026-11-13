@@ -1,51 +1,83 @@
 # Leanwisp
 
-A conservative Lean 4 source formatter. Version 0.1.0 targets Lean 4.35.0
-and the built-in Init syntax. Python handles the CLI and byte edits; a bundled
-Lean helper uses Lean's own parser, without elaborating or executing the input.
+A Lean 4 source formatter with a Rust layout engine. Leanwisp normalizes spacing,
+indentation, declaration separation, proof and `do` blocks, `match` alternatives,
+and line wrapping. It supports Lean 4.35.0, standard library imports, imported
+syntax extensions, and local notation/macro declarations with formatter support.
 
 ```sh
-nix run . -- --output text source format-source --source 'file:///dev/stdin'
-nix run . -- source format-source --file Example.lean --write
+# Format a file, writing only after validation succeeds.
+nix run github:conao3/rust-leanwisp -- source format-source --file Example.lean --write
+# Check without writing (254 means formatting changes are needed).
 nix run . -- source check-source --file Example.lean
-nix develop --command make check
-nix build
+# An editor filter: source on stdin, formatted source on stdout.
+nix run . -- --output text source format-source --source file:///dev/stdin
+# Choose the target line width (default 100, supported range 20–300).
+nix run . -- source format-source --file Example.lean --line-width 80
 ```
 
-For example, `#eval (3: Nat) + 4` becomes `#eval (3 : Nat) + 4`.
-Named inputs only: `--source` accepts literal text or `file://` contents;
-`--file` reads a UTF-8 file. Formatting returns JSON (`Changed`, `Source`) by
-default. Global `--output text` emits only source, suitable for an editor filter.
-Use `leanwisp help`, `leanwisp source help`, or subcommand `help`.
-No writes happen without `format-source --file ... --write`.
+For example:
 
-The formatter normalizes same-line spaces around `:`, `:=`, `=>`, arrows,
-`=`, `+`, `*`, and after commas, using parser token boundaries. It preserves
-comments, literal contents, line breaks (including CRLF), indentation and EOF.
-It reparses the result and rejects changes to node kinds, identifiers or atoms.
-This catches layout-sensitive changes despite identical token spellings.
-It does not reflow proofs or enforce the entire
-[Lean standard library style guide](https://github.com/leanprover/lean4/blob/master/doc/std/style.md).
+```lean
+-- Input
+def double(n:Nat):Nat:=n+n
+-- Output
+def double (n : Nat) : Nat :=
+  n + n
+```
 
-**Limits:** additional imports (including Std/Mathlib), parser-changing commands
-and incomplete source are rejected. No project dependencies are loaded. This is
-an intentionally restricted first release, not a general Mathlib formatter.
-Syntax-tree equality checks parsing, not elaborated theorem equivalence; macros
-that observe source positions are outside the supported contract. The CLI calls
-Lean up to twice per input and prioritizes validation over speed. Only Linux has been
-executed locally; the flake also declares aarch64-darwin.
+Declarations are separated with a blank line and files end with one newline.
+Proof bullets, structure fields, `do` statements, and match arms receive canonical
+indentation. Groups wrap according to `--line-width`; unbreakable literals and
+comments may exceed it. Literal contents, nested comments and their ordering are
+preserved. Formatting checks both syntax-tree equality and comment contents,
+then checks that a second formatting pass produces the same result. A failure
+returns a diagnostic without writing the input.
 
-Exit codes: 0 success, 252 invalid CLI grammar, 254 unsupported/invalid input,
-I/O errors or a check finding changes, 255 unexpected failure. Diagnostics go
-to stderr. `--debug` includes unexpected exception details.
+Lake projects are discovered upward from `--file` (or the current directory for
+stdin). `--project-dir PATH` selects one explicitly. Build its imported modules
+first with `lake build`; Leanwisp runs its syntax adapter in `lake env` so local
+and dependency modules, including Mathlib when available in that project, use
+the project's search path. The project's Lean version must match 4.35.0.
 
-For Emacs, the CLI can be used as a region filter with
-`--output text source format-source --source file:///dev/stdin`; only replace
-the buffer on exit 0. No running editor or user files are modified by setup.
+The Rust implementation owns command parsing, project discovery, document
+rendering, width/indentation policies, validation and file handling. A bundled,
+natively compiled Lean adapter uses the real parser and formatter extensions to
+produce syntax fingerprints, comment trivia and a formatting document. Imported
+modules are loaded; commands that change the parser or scope are elaborated so
+later commands can use their syntax. Ordinary declarations and `#eval` commands
+are not elaborated. This adapter is intentionally retained rather than attempting
+to reimplement Lean's extensible grammar in Rust.
 
-Development uses uv, hatchling, pytest and ruff. `nix fmt` formats implementation
-files; `make check` is the verification entry. Enable the optional pre-commit hook
-with `git config core.hooksPath .githooks`.
+Limitations: syntax extensions need a corresponding Lean formatter; arbitrary
+custom elaborators that change grammar indirectly are not automatically handled.
+A syntax tree comparison does not prove elaborated theorem equivalence for
+macros that inspect source positions. Invalid input, missing modules, unsupported
+formatters and unstable layouts are reported as errors. Line endings outside
+literals/comments are normalized to LF. Windows is not supported; Linux is tested,
+and the Nix flake also declares aarch64-darwin.
 
-Apache-2.0. The parser helper depends on Lean's public source APIs and is tested
-with the Lean version pinned by flake.lock.
+CLI inputs are named parameters. `--source` accepts literal text or `file://`
+contents; `--file` reads a UTF-8 file. JSON output is the default (`Changed`,
+`Source`); global `--output text` emits source and `--output table` reports change
+status. Use `leanwisp help`, `leanwisp source help`, and subcommand `--help`.
+Exit codes: 0 success, 252 CLI syntax errors, 254 input/formatting/check errors.
+Only `format-source --file ... --write` writes, and concurrent changes detected
+before the write are rejected. Symlink inputs are rejected.
+
+Development:
+
+```sh
+nix develop --command make check  # rustfmt/nixfmt, clippy, all tests
+nix build                       # packaged application and integration tests
+nix run . -- --version
+```
+
+Enable the optional pre-commit hook with `git config core.hooksPath .githooks`.
+Tests include golden layout expectations, narrow/wide documents, declarations,
+proofs, `do`/`match`/structures, literal/comment preservation, 150 declarations,
+Lake-local notation, CLI write/check behavior and compilation of formatted Lean.
+
+Apache-2.0. Leanwisp uses the Lean parser/formatter APIs pinned by `flake.lock`.
+The prior Python prototype is retained in Git history; current implementation and
+packaging use Rust and the Lean adapter.
